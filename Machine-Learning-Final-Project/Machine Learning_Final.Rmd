@@ -1,0 +1,345 @@
+---
+title: "GStore_Initial_Process"
+author: "Group7"
+date: "2024-10-22"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+dim(AfterClean)
+```
+
+```{r}
+summary(AfterClean)
+```
+
+```{r}
+round(cor(AfterClean[1:10]),digit = 3)
+```
+
+```{r}
+pairs(AfterClean[1:10])
+```
+
+```{r}
+#purchase01 <- AfterClean$purchase
+#visits01 <- AfterClean$visits
+#AfterClean <- data.frame(cbind(purchase01,AfterClean))
+#AfterClean <- data.frame(cbind(visits01,AfterClean))
+```
+
+```{r}
+lm.fit <- lm(purchase~visitNumber+hitNumber+hour+minute+visits+hits+pageviews+timeOnSite+newVisits, data = AfterClean)
+summary(lm.fit)
+```
+
+```{r}
+lm.fit1 <- lm(purchase~hitNumber+hour+minute+visits+hits+newVisits, data = AfterClean)
+summary(lm.fit1)
+```
+
+```{r}
+lm.fit2 <- lm(purchase~hitNumber+minute+visits+hits+newVisits, data = AfterClean)
+summary(lm.fit2)
+```
+
+```{r}
+lm.fit3 <- lm(purchase~hitNumber+visits+hits, data = AfterClean)
+summary(lm.fit3)
+```
+
+```{r}
+# change column channelGrouping into numeric factor
+AfterClean$channelGrouping <- factor(AfterClean$channelGrouping)
+AfterClean$channelGrouping_numeric <- as.numeric(AfterClean$channelGrouping)
+```
+
+```{r}
+# change column browser into numeric factor
+AfterClean$browser <- factor(AfterClean$browser)
+AfterClean$browser_numeric <- as.numeric(AfterClean$channelGrouping)
+```
+
+```{r}
+# change column continent into numeric factor
+AfterClean$continent <- factor(AfterClean$continent)
+AfterClean$continent_numeric <- as.numeric(AfterClean$continent)
+```
+
+```{r}
+# change column continent into numeric factor
+AfterClean$country <- factor(AfterClean$country)
+AfterClean$country_numeric <- as.numeric(AfterClean$country)
+```
+
+
+```{r}
+Gstore_numeric_dataset <- AfterClean[ , 1:10]
+Gstore_numeric_dataset <- cbind(Gstore_numeric_dataset, AfterClean[, 22:25])
+summary(Gstore_numeric_dataset)
+```
+
+```{r}
+pairs(Gstore_numeric_dataset)
+```
+
+```{r}
+boxplot(country_numeric ~ purchase, data = Gstore_numeric_dataset)
+```
+## K-means
+```{r}
+DF <- t(Gstore_numeric_dataset)
+D <- as.dist(1 - cor(DF))
+
+kmean_complete <- table(predicted = as.numeric(cutree(hclust(D, method = 'complete'), k = 2)) - 1, 
+                        truth = Gstore_numeric_dataset$purchase)
+kmean_complete
+test_error_complete <- (kmean_complete[2, 1] + kmean_complete[1, 2]) / sum(kmean_complete)
+test_error_complete
+```
+
+```{r}
+kmean_average <- table(predicted = as.numeric(cutree(hclust(D, method = 'average'), k = 2)) - 1, 
+                        truth = Gstore_numeric_dataset$purchase)
+kmean_average
+test_error_average <- (kmean_average[2, 1] + kmean_average[1, 2]) / sum(kmean_average)
+test_error_average
+```
+## train_set and test_set
+```{r}
+set.seed(27)
+train = sample(nrow(Gstore_numeric_dataset),nrow(Gstore_numeric_dataset)*0.7)
+train_set <- Gstore_numeric_dataset[train, ]
+test_set <- Gstore_numeric_dataset[-train, ]
+```
+
+## neural network
+```{r}
+library(neuralnet)
+nn <- neuralnet(purchase ~ ., data = train_set, linear.output = F, hidden = 3)
+nn$weights
+plot(nn, rep="best")
+test_predictions <- compute(nn, test_set[, -which(names(test_set) 
+                                                  == "purchase")])
+
+predicted_classes <- ifelse(test_predictions$net.result > 0.27, 1, 0)
+test.error <- sum(predicted_classes != test_set$purchase) / nrow(test_set)
+print(paste("Test error:", test.error))
+confusion_matrix <- table(Predicted = predicted_classes, 
+                          Actual = test_set$purchase)
+print(confusion_matrix)
+```
+```{r}
+purchase.error.neural <- sum((predicted_classes == 0) & (test_set$purchase == 1))
+purchase.error.rate.neural <- purchase.error.neural / sum(test_set$purchase == 1)
+purchase.error.rate.neural
+not.purchase.error.neural <- sum((predicted_classes == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.neural <- purchase.error.neural / sum(test_set$purchase == 0)
+not.purchase.error.rate.neural
+```
+
+
+
+## boosting tree
+```{r}
+library(gbm)
+set.seed(27)
+mse = list()
+for(i in seq(1,1000,1)){
+  boost.fit <- gbm(purchase ~ ., data = train_set, distribution = "bernoulli", n.trees = 5000,interaction.depth = 4, shrinkage = i/1000, verbose = F)
+  boost.probs <-predict(boost.fit, newdata = test_set, n.trees = 5000)
+  boost.pred<-ifelse(boost.probs > 0.27,1,0)
+  mse[i] = mean(boost.pred != test_set$purchase)}
+
+min(unlist(mse))
+which.min(mse)
+```
+```{r}
+table(boost.pred, test_set$purchase)
+```
+
+```{r}
+purchase.error.boost <- sum((boost.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.boost <- purchase.error.boost / sum(test_set$purchase == 1)
+purchase.error.rate.boost
+not.purchase.error.boost <- sum((boost.pred == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.boost <- purchase.error.boost / sum(test_set$purchase == 0)
+not.purchase.error.rate.boost
+```
+## Random Forest
+```{r}
+library(randomForest)
+
+rf.fit <- randomForest(purchase ~ ., data = train_set, mtry = 4, ntree = 200)
+# the number of full set of predictors is 13
+# so, mtry approximately equals to sqrt(13), which is about 3.6
+
+rf.probs <- predict(rf.fit, newdata = test_set)
+rf.pred <- ifelse(rf.probs > 0.27, 1, 0)
+
+rf.fit
+
+table(test_set$purchase, rf.pred)
+
+mean(test_set$purchase != rf.pred)
+
+varImpPlot(rf.fit)
+```
+
+
+```{r}
+purchase.error.rf <- sum((rf.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.rf <- purchase.error.rf / sum(test_set$purchase == 1)
+purchase.error.rate.rf
+not.purchase.error.rf <- sum((rf.pred == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.rf <- purchase.error.rf / sum(test_set$purchase == 0)
+not.purchase.error.rate.rf
+```
+
+## Bagging
+```{r}
+library(randomForest)
+
+bag.fit <- randomForest(purchase ~ ., data = train_set, mtry = 13, ntree = 200)
+# the number of full set of predictors is 13
+bag.probs <- predict(bag.fit, newdata = test_set)
+bag.pred <- ifelse(bag.probs > 0.27, 1, 0)
+
+bag.fit
+
+table(test_set$purchase, bag.pred)
+
+mean(bag.pred != test_set$purchase)
+
+varImpPlot(bag.fit)
+```
+
+```{r}
+purchase.error.bag <- sum((bag.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.bag <- purchase.error.bag / sum(test_set$purchase == 1)
+purchase.error.rate.bag
+not.purchase.error.bag <- sum((bag.pred == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.bag <- purchase.error.bag / sum(test_set$purchase == 0)
+not.purchase.error.rate.bag
+```
+
+## Classification Tree
+```{r}
+library (tree)
+train_set$purchase <- as.factor(train_set$purchase)
+tree.fit <- tree(purchase ~ ., data = train_set)
+summary(tree.fit)
+plot(tree.fit)
+text(tree.fit,pretty=0)
+tree.pred <- predict(tree.fit, test_set, type = "class")
+table(tree.pred,test_set$purchase)
+mean(tree.pred != test_set$purchase)
+```
+
+```{r}
+purchase.error.ctree <- sum((tree.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.ctree <- purchase.error.ctree / sum(test_set$purchase == 1)
+purchase.error.rate.ctree
+not.purchase.error.ctree <- sum((tree.pred == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.ctree <- purchase.error.ctree / sum(test_set$purchase == 0)
+not.purchase.error.rate.ctree
+```
+
+## QDA
+```{r}
+library(MASS)
+print(table(train_set$purchase))
+qda.fit <- qda(purchase ~ .-pageviews-browser_numeric, data = train_set) # multicollinearity
+qda.pred <- predict(qda.fit, test_set)
+
+table.qda <- table(qda.pred$class, test_set$purchase)
+table.qda
+mean(qda.pred$class != test_set$purchase)
+```
+```{r}
+print(table(train_set$purchase))
+```
+
+```{r}
+purchase.error.ctree <- sum((tree.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.ctree <- purchase.error.ctree / sum(test_set$purchase == 1)
+purchase.error.rate.ctree
+```
+## LDA
+```{r}
+library(MASS)
+lda.fit <- lda(purchase ~ .-pageviews-browser_numeric, data = train_set) # multicollinearity
+lda.pred <- predict(lda.fit, test_set)
+
+table.lda <- table(lda.pred$class, test_set$purchase)
+table.lda
+mean(lda.pred$class != test_set$purchase)
+```
+
+```{r}
+purchase.error.lda <- sum((lda.pred$class == 0) & (test_set$purchase == 1))
+purchase.error.rate.lda <- purchase.error.lda / sum(test_set$purchase == 1)
+purchase.error.rate.lda
+not.purchase.error.lda <- sum((lda.pred$class == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.lda <- purchase.error.lda / sum(test_set$purchase == 0)
+not.purchase.error.rate.lda
+```
+
+## logistic regression
+```{r}
+logit.fit <- glm(purchase ~ .-pageviews-browser_numeric, data = train_set, family = "binomial")
+logit.probs <- predict(logit.fit, newdata = test_set, type = "response")
+logit.pred <- ifelse(logit.probs > 0.27, 1, 0)
+
+table(test_set$purchase, logit.pred)
+mean(test_set$purchase != logit.pred)
+
+summary(logit.fit)
+```
+
+```{r}
+purchase.error.glm <- sum((logit.pred == 0) & (test_set$purchase == 1))
+purchase.error.rate.glm <- purchase.error.glm / sum(test_set$purchase == 1)
+purchase.error.rate.glm
+not.purchase.error.glm <- sum((logit.pred == 1) & (test_set$purchase == 0))
+not.purchase.error.rate.glm <- purchase.error.glm / sum(test_set$purchase == 0)
+not.purchase.error.rate.glm
+```
+
+```{r}
+logit.fit1 <- glm(purchase ~ +hits+hour, data = train_set, family = "binomial")
+logit.probs <- predict(logit.fit1, newdata = test_set, type = "response")
+logit.pred <- ifelse(logit.probs > 0.27, 1, 0)
+
+table(test_set$purchase, logit.pred)
+mean(test_set$purchase != logit.pred)
+
+summary(logit.fit1)
+```
+
+```{r}
+logit.fit1 <- glm(purchase ~ hits, data = train_set, family = "binomial")
+logit.probs <- predict(logit.fit1, newdata = test_set, type = "response")
+logit.pred <- ifelse(logit.probs > 0.27, 1, 0)
+
+table(test_set$purchase, logit.pred)
+mean(test_set$purchase != logit.pred)
+
+summary(logit.fit1)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
